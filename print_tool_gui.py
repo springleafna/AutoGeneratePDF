@@ -86,7 +86,6 @@ class PrintToolApp:
         self.root.title("AutoGeneratePDF v2.0")
         self.root.geometry("900x750")
         self.root.resizable(True, True)  # 允许调整大小
-        self.root.iconbitmap(resource_path("icon.ico"))
 
         # 新增：用于存储网址输入框的列表
         self.url_entries = []

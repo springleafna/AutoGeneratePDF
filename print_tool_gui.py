@@ -3,6 +3,7 @@
 AutoGeneratePDF - 图形界面版（用户输入网址自动打印PDF）
 作者：springleaf
 用途：唤唤专用
+版本：2.0 (支持多网址)
 """
 
 import os
@@ -24,7 +25,6 @@ from datetime import datetime
 
 
 # ========== 配置区 (Configuration) ==========
-# 将所有可能变动的字符串放在这里，方便统一管理
 class Config:
     # 语言按钮配置: (界面显示的按钮文本, 文件名中使用的语言标签)
     LANGUAGE_BUTTONS = [
@@ -73,51 +73,93 @@ def create_date_folder_on_desktop():
     logger.info(f"✅ 文件将保存至：{date_folder}")
     return date_folder
 
+
 # 清理文件名的辅助函数
 def _clean_filename(name):
     """ 移除文件名中的非法字符 """
-    # Windows 文件名非法字符: \ / : * ? " < > |
     return re.sub(r'[\\/*?:"<>|]', '_', name).strip()
+
 
 class PrintToolApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("AutoGeneratePDF")
-        self.root.geometry("500x320")  # 稍微增加高度以容纳状态文本
-        self.root.resizable(False, False)
-        # self.root.iconbitmap(resource_path("icon.ico")) # 如有图标，取消此行注释
+        self.root.title("AutoGeneratePDF v2.0")
+        self.root.geometry("900x750")
+        self.root.resizable(True, True)  # 允许调整大小
+        self.root.iconbitmap(resource_path("icon.ico"))
+
+        # 新增：用于存储网址输入框的列表
+        self.url_entries = []
+        # 新增：用于处理任务队列
+        self.url_queue = []
+        self.total_urls = 0
 
         self._setup_ui()
 
+    def _add_url_entry(self, is_first=False):
+        """ 动态添加入网址输入框和删除按钮 """
+        row_frame = ttk.Frame(self.url_list_frame)
+        row_frame.pack(fill=tk.X, pady=2)
+
+        entry = ttk.Entry(row_frame, width=60, font=("微软雅黑", 10))
+        entry.pack(side=tk.LEFT, expand=True, fill=tk.X)
+        self.url_entries.append(entry)
+
+        if not is_first:
+            remove_btn = ttk.Button(row_frame, text="-", width=3,
+                                    command=lambda rf=row_frame, en=entry: self._remove_url_entry(rf, en))
+            remove_btn.pack(side=tk.LEFT, padx=(5, 0))
+
+    def _remove_url_entry(self, frame_to_remove, entry_to_remove):
+        """ 移除一个网址输入框 """
+        frame_to_remove.destroy()
+        self.url_entries.remove(entry_to_remove)
+
     def _setup_ui(self):
-        """ 初始化用户界面 """
-        frame = ttk.Frame(self.root, padding="20")
-        frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
+        """ 初始化用户界面 (已修改以支持多网址) """
+        main_frame = ttk.Frame(self.root, padding="20")
+        main_frame.pack(fill=tk.BOTH, expand=True)
 
-        title_label = ttk.Label(frame, text="📚 AutoGeneratePDF", font=("微软雅黑", 16, "bold"))
-        title_label.grid(row=0, column=0, columnspan=2, pady=(0, 20))
+        title_label = ttk.Label(main_frame, text="📚 AutoGeneratePDF", font=("微软雅黑", 16, "bold"))
+        title_label.pack(pady=(0, 10))
 
-        ttk.Label(frame, text="请输入打印页面网址：", font=("微软雅黑", 11)).grid(row=1, column=0, sticky=tk.W)
-        self.url_entry = ttk.Entry(frame, width=50)
-        self.url_entry.grid(row=2, column=0, columnspan=2, pady=(0, 15), sticky=(tk.W, tk.E))
+        # --- 网址输入区 ---
+        url_area_frame = ttk.LabelFrame(main_frame, text=" 网址列表 ", padding=10)
+        url_area_frame.pack(fill=tk.X, pady=10)
 
-        button_frame = ttk.Frame(frame)
-        button_frame.grid(row=3, column=0, columnspan=2, pady=15)
+        add_btn = ttk.Button(url_area_frame, text="✚ 添加网址", command=self._add_url_entry)
+        add_btn.pack(anchor=tk.W, pady=(0, 10))
+        self.add_url_button = add_btn  # 保存引用以便后续禁用
 
-        self.start_btn = ttk.Button(button_frame, text="✅ 开始打印", command=self.start_printing)
+        # 创建一个可滚动的Frame来放置URL输入框
+        canvas = tk.Canvas(url_area_frame, borderwidth=0, background="#ffffff")
+        self.url_list_frame = ttk.Frame(canvas)  # 核心：所有输入框都放在这个Frame里
+        scrollbar = ttk.Scrollbar(url_area_frame, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        canvas.create_window((4, 4), window=self.url_list_frame, anchor="nw")
+
+        self.url_list_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+
+        # --- 按钮和状态区 ---
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(pady=10)
+
+        self.start_btn = ttk.Button(button_frame, text="✅ 开始打印", command=self.start_printing_all)
         self.start_btn.pack(side=tk.LEFT, padx=5)
 
         self.exit_btn = ttk.Button(button_frame, text="❌ 退出", command=self.root.quit)
         self.exit_btn.pack(side=tk.LEFT, padx=5)
 
-        self.status_var = tk.StringVar(value="等待输入网址...")
-        self.status_label = ttk.Label(frame, textvariable=self.status_var, wraplength=450, foreground="gray",
+        self.status_var = tk.StringVar(value="请添加网址后开始任务...")
+        self.status_label = ttk.Label(main_frame, textvariable=self.status_var, wraplength=550, foreground="gray",
                                       font=("微软雅黑", 9))
-        self.status_label.grid(row=4, column=0, columnspan=2, pady=(10, 0))
+        self.status_label.pack(pady=(10, 0))
 
-        self.root.bind('<Return>', lambda e: self.start_printing())
+        # 初始化时添加第一个输入框
+        self._add_url_entry(is_first=True)
 
     def update_status(self, message):
         """ 更新状态栏文本并刷新UI """
@@ -125,30 +167,70 @@ class PrintToolApp:
         logger.info(message)
         self.root.update_idletasks()  # 强制UI刷新
 
-    def start_printing(self):
-        """ 验证用户输入并启动打印流程 """
-        url = self.url_entry.get().strip()
-        if not url.startswith(("http://", "https://")):
-            messagebox.showerror("错误", "请正确输入网址（以 http:// 或 https:// 开头）")
+    def start_printing_all(self):
+        """ 新增：验证所有用户输入并启动打印队列 """
+        # 1. 收集所有非空的有效网址
+        urls = [entry.get().strip() for entry in self.url_entries if entry.get().strip()]
+
+        if not urls:
+            messagebox.showerror("错误", "请输入至少一个网址！")
             return
 
-        self.start_btn.config(state="disabled")
-        self.update_status("🚀 任务开始，正在准备环境...")
+        # 2. 验证所有网址格式
+        for url in urls:
+            if not url.startswith(("http://", "https://")):
+                messagebox.showerror("错误", f"网址格式不正确：\n{url}\n\n请确保所有网址都以 http:// 或 https:// 开头。")
+                return
 
-        # 使用 after 避免阻塞GUI
-        self.root.after(100, lambda: self.run_print_job(url))
+        self.url_queue = urls
+        self.total_urls = len(urls)
+
+        # 3. 禁用按钮，防止重复点击
+        self.start_btn.config(state="disabled")
+        self.add_url_button.config(state="disabled")
+        self.update_status(f"🚀 任务队列已创建，共 {self.total_urls} 个任务。正在准备环境...")
+
+        # 4. 使用 after 启动第一个任务，避免阻塞GUI
+        self.root.after(100, self._process_next_url)
+
+    def _process_next_url(self):
+        """ 新增：处理队列中的下一个网址 """
+        if not self.url_queue:
+            # 队列为空，所有任务完成
+            self.update_status("🎉 全部任务完成！请在桌面 'AutoGeneratePDF' 文件夹中查看结果。")
+            messagebox.showinfo("成功", f"所有 {self.total_urls} 个打印任务已处理完毕！")
+            # 恢复按钮
+            self.start_btn.config(state="normal")
+            self.add_url_button.config(state="normal")
+            return
+
+        # 取出队列中的第一个网址进行处理
+        current_url = self.url_queue.pop(0)
+        task_num = self.total_urls - len(self.url_queue)
+        self.update_status(f"📄 开始处理第 {task_num} / {self.total_urls} 个任务: {current_url}")
+
+        # 执行单个打印任务
+        success = self.run_print_job(current_url)
+
+        if not success:
+            # 如果中途失败，可以选择停止或继续。这里我们选择记录日志并继续
+            self.update_status(f"⚠️ 第 {task_num} 个任务处理失败，跳过并继续下一个...")
+            logger.warning(f"任务 {current_url} 处理失败，已跳过。")
+
+        # 调度下一个任务
+        self.root.after(100, self._process_next_url)
 
     def _setup_driver(self, download_dir):
-        """ 配置并返回一个 Chrome WebDriver 实例 """
+        """ 配置并返回一个 Chrome WebDriver 实例 (无修改) """
         self.update_status("配置浏览器...")
+        # ... (此函数内容与原来完全相同)
         options = Options()
         prefs = {
             "download.default_directory": download_dir,
             "download.prompt_for_download": False,
-            "plugins.always_open_pdf_externally": True,  # 确保PDF被视为下载
+            "plugins.always_open_pdf_externally": True,
         }
         options.add_experimental_option("prefs", prefs)
-        # 这个参数会让 Chrome 跳过打印预览，直接调用系统保存对话框
         options.add_argument("--kiosk-printing")
         options.add_argument("--start-maximized")
         options.add_argument("--disable-extensions")
@@ -159,12 +241,10 @@ class PrintToolApp:
         return webdriver.Chrome(service=service, options=options)
 
     def _handle_save_dialog(self, download_dir, lang_tag, base_filename):
-        """
-        通过 found_index=0 解决 ElementAmbiguousError，精确定位控件。
-        """
+        """ 处理“另存为”对话框 (无修改) """
         self.update_status(f"等待 '{lang_tag}' 语言的保存对话框...")
+        # ... (此函数内容与原来完全相同)
         try:
-            # 1. 使用已被验证有效的方式连接到对话框
             self.update_status("使用 'win32' 后端连接对话框...")
             app = Application(backend="win32").connect(
                 title_re=Config.SAVE_AS_DIALOG_TITLE_RE,
@@ -174,7 +254,6 @@ class PrintToolApp:
             self.update_status("✅ 对话框已连接，正在精确定位控件...")
             dlg.wait("ready", timeout=Config.DIALOG_TIMEOUT)
 
-            # 2. 构造完整的文件路径
             if not base_filename:
                 base_filename = f"未命名文档_{datetime.now().strftime('%H%M%S')}"
                 logger.warning("网页标题为空，使用默认文件名。")
@@ -183,25 +262,20 @@ class PrintToolApp:
             full_file_path = os.path.join(download_dir, new_filename)
             self.update_status(f"准备保存文件至: {full_file_path}")
 
-            # 3. 通过 found_index=0 精确地选择第一个 ComboBox（文件名输入框的容器）
             file_name_combo = dlg.child_window(class_name="ComboBox", found_index=0)
-
-            # 4. 然后在这个容器内部找到唯一的 Edit 控件（输入框本身）
             filename_edit = file_name_combo.child_window(class_name="Edit")
 
             filename_edit.wait('visible', timeout=5)
             filename_edit.set_focus()
-            filename_edit.set_edit_text("")  # 清空
+            filename_edit.set_edit_text("")
             filename_edit.type_keys(full_file_path, with_spaces=True)
             time.sleep(1)
 
-            # 5. 精确查找标题完全匹配的“保存”按钮
             save_button = dlg.child_window(title="保存(&S)", class_name="Button")
             save_button.wait('enabled', timeout=5)
             save_button.click_input()
             self.update_status(f"已点击保存: {new_filename}")
 
-            # 6. 等待文件保存完成
             for _ in range(Config.FILE_SAVE_TIMEOUT * 2):
                 if os.path.exists(full_file_path) and os.path.getsize(full_file_path) > 1024:
                     self.update_status(f"✅ 成功保存：{new_filename}")
@@ -226,28 +300,24 @@ class PrintToolApp:
             return False
 
     def _process_single_language(self, driver, btn_text, lang_tag, download_dir):
-        """ 核心逻辑：为单一语言获取标题、点击按钮、打印并保存 """
+        """ 核心逻辑：为单一语言获取标题、点击按钮、打印并保存 (无修改) """
         self.update_status(f"正在处理：{btn_text}")
+        # ... (此函数内容与原来完全相同)
         wait = WebDriverWait(driver, Config.SELENIUM_TIMEOUT)
-
         try:
-            # 1. 点击语言切换按钮
             lang_button_xpath = f"//button[.//span[contains(text(), '{btn_text}')]]"
             lang_button = wait.until(EC.element_to_be_clickable((By.XPATH, lang_button_xpath)))
             lang_button.click()
-            time.sleep(1.5)  # 点击后等待标题和内容刷新
+            time.sleep(1.5)
 
-            # 2. 获取并清理网页标题作为文件名
             page_title = driver.title
             base_filename = _clean_filename(page_title)
             self.update_status(f"获取到原始文件名: {base_filename}")
 
-            # 3. 点击“在线打印”按钮
             print_button_xpath = f"//button[.//span[contains(text(), '{Config.PRINT_BUTTON_TEXT}')]]"
             print_button = wait.until(EC.element_to_be_clickable((By.XPATH, print_button_xpath)))
             print_button.click()
 
-            # 4. 处理弹出的“另存为”对话框，并把获取到的文件名传进去
             return self._handle_save_dialog(download_dir, lang_tag, base_filename)
 
         except Exception as e:
@@ -256,7 +326,10 @@ class PrintToolApp:
             return False
 
     def run_print_job(self, url):
-        """ 完整执行从打开网页到全部打印完成的流程 """
+        """
+        完整执行单个网址的打印流程。
+        (已修改：移除原有的最终状态更新和按钮恢复逻辑，并返回执行结果)
+        """
         driver = None
         try:
             download_dir = create_date_folder_on_desktop()
@@ -266,25 +339,25 @@ class PrintToolApp:
             driver.get(url)
 
             # 主循环，处理每一种语言
+            all_langs_successful = True
             for btn_text, lang_tag in Config.LANGUAGE_BUTTONS:
-                self._process_single_language(driver, btn_text, lang_tag, download_dir)
+                success = self._process_single_language(driver, btn_text, lang_tag, download_dir)
+                if not success:
+                    all_langs_successful = False
                 time.sleep(2)  # 在处理下一种语言前稍作停顿
 
-            self.update_status("🎉 全部任务完成！请在桌面 'AutoGeneratePDF' 文件夹中查看结果。")
-            messagebox.showinfo("成功", f"所有打印任务已处理完毕！\n\n保存位置：\n{download_dir}")
+            return all_langs_successful
 
         except Exception as e:
             error_message = f"❌ 执行过程中发生严重错误：{str(e)}"
             self.update_status(error_message)
-            logger.error(error_message, exc_info=True)  # 记录完整的堆栈信息
-            messagebox.showerror("严重错误", f"程序运行出错：\n{str(e)}\n\n请检查网络或联系管理员。")
+            logger.error(error_message, exc_info=True)
+            # 不再弹窗，只记录日志并返回失败，由上层循环决定如何处理
+            return False
 
         finally:
             if driver:
                 driver.quit()
-            self.start_btn.config(state="normal")  # 无论成功失败，最后都恢复按钮
-            self.update_status("等待新的任务...")
-
 
 if __name__ == "__main__":
     root = tk.Tk()

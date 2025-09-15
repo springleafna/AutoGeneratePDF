@@ -15,9 +15,8 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from selenium import webdriver
 from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.edge.options import Options
+from selenium.webdriver.edge.service import Service
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from pywinauto import Application, timings, ElementAmbiguousError
@@ -86,7 +85,7 @@ class PrintToolApp:
         self.root.title("AutoGeneratePDF v2.0")
         self.root.geometry("900x750")
         self.root.resizable(True, True)  # 允许调整大小
-        self.root.iconbitmap(resource_path("icon.ico"))
+        # self.root.iconbitmap(resource_path("icon.ico"))
 
         # 新增：用于存储网址输入框的列表
         self.url_entries = []
@@ -221,9 +220,9 @@ class PrintToolApp:
         self.root.after(100, self._process_next_url)
 
     def _setup_driver(self, download_dir):
-        """ 配置并返回一个 Chrome WebDriver 实例 (无修改) """
-        self.update_status("配置浏览器...")
-        # ... (此函数内容与原来完全相同)
+        """ 配置并返回一个 Microsoft Edge WebDriver 实例 (使用本地驱动) """
+        self.update_status("配置 Edge 浏览器...")
+
         options = Options()
         prefs = {
             "download.default_directory": download_dir,
@@ -237,8 +236,24 @@ class PrintToolApp:
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
 
-        service = Service(ChromeDriverManager().install())
-        return webdriver.Chrome(service=service, options=options)
+        # 直接指定本地的 msedgedriver.exe 路径
+        # msedgedriver.exe 和 .py 文件在同一个文件夹里
+        driver_path = "msedgedriver.exe"
+
+        self.update_status(f"使用本地 Edge WebDriver: {driver_path}")
+        try:
+            # 使用 executable_path 参数来指定驱动位置
+            service = Service(executable_path=driver_path)
+
+            self.update_status("启动 Edge 浏览器...")
+            return webdriver.Edge(service=service, options=options)
+        except Exception as e:
+            # 增加一个更详细的错误捕获，以防驱动文件有问题
+            error_msg = f"启动 Edge 驱动失败！请确认 '{driver_path}' 存在且版本正确。错误: {e}"
+            logger.error(error_msg, exc_info=True)
+            self.update_status(f"❌ {error_msg}")
+            # 主动抛出异常，让上层知道失败了
+            raise
 
     def _handle_save_dialog(self, download_dir, lang_tag, base_filename):
         """ 处理“另存为”对话框 (无修改) """

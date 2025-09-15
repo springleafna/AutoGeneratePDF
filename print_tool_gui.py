@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-AutoGeneratePDF - 图形界面版（用户输入网址）
+AutoGeneratePDF - 图形界面版（用户输入网址自动打印PDF）
 作者：springleaf
 用途：唤唤专用
 """
@@ -19,7 +19,7 @@ from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from pywinauto import Application, timings
+from pywinauto import Application, timings, ElementAmbiguousError
 from datetime import datetime
 
 
@@ -102,7 +102,6 @@ class PrintToolApp:
         ttk.Label(frame, text="请输入打印页面网址：", font=("微软雅黑", 11)).grid(row=1, column=0, sticky=tk.W)
         self.url_entry = ttk.Entry(frame, width=50)
         self.url_entry.grid(row=2, column=0, columnspan=2, pady=(0, 15), sticky=(tk.W, tk.E))
-        self.url_entry.insert(0, "https://")
 
         button_frame = ttk.Frame(frame)
         button_frame.grid(row=3, column=0, columnspan=2, pady=15)
@@ -161,49 +160,69 @@ class PrintToolApp:
 
     def _handle_save_dialog(self, download_dir, lang_tag, base_filename):
         """
-        使用 pywinauto 处理“另存为”对话框。
-        - base_filename: 从 Selenium 获取的、已经清理过的网页标题。
+        通过 found_index=0 解决 ElementAmbiguousError，精确定位控件。
         """
         self.update_status(f"等待 '{lang_tag}' 语言的保存对话框...")
         try:
-            # 等待对话框出现，而不是使用固定时间的 sleep
-            app = Application(backend="uia").connect(
+            # 1. 使用已被验证有效的方式连接到对话框
+            self.update_status("使用 'win32' 后端连接对话框...")
+            app = Application(backend="win32").connect(
                 title_re=Config.SAVE_AS_DIALOG_TITLE_RE,
                 timeout=Config.DIALOG_TIMEOUT
             )
             dlg = app.window(title_re=Config.SAVE_AS_DIALOG_TITLE_RE)
-            dlg.wait('exists', timeout=Config.DIALOG_TIMEOUT)
+            self.update_status("✅ 对话框已连接，正在精确定位控件...")
+            dlg.wait("ready", timeout=Config.DIALOG_TIMEOUT)
 
-            # 构造新文件名，不再从对话框读取
+            # 2. 构造完整的文件路径
             if not base_filename:
-                # 如果由于某种原因没获取到标题，给一个默认名
                 base_filename = f"未命名文档_{datetime.now().strftime('%H%M%S')}"
                 logger.warning("网页标题为空，使用默认文件名。")
 
             new_filename = f"{base_filename}_{lang_tag}.pdf"
+            full_file_path = os.path.join(download_dir, new_filename)
+            self.update_status(f"准备保存文件至: {full_file_path}")
 
-            # 设置新文件名并保存
-            dlg.Edit.set_text(new_filename)
-            time.sleep(0.5)
-            dlg.Button("保存(S)").click()  # 根据截图，按钮文本是 "保存(S)"
-            self.update_status(f"已触发展存为：{new_filename}")
+            # 3. 通过 found_index=0 精确地选择第一个 ComboBox（文件名输入框的容器）
+            file_name_combo = dlg.child_window(class_name="ComboBox", found_index=0)
 
-            # 等待文件下载完成的逻辑不变
-            file_path = os.path.join(download_dir, new_filename)
+            # 4. 然后在这个容器内部找到唯一的 Edit 控件（输入框本身）
+            filename_edit = file_name_combo.child_window(class_name="Edit")
+
+            filename_edit.wait('visible', timeout=5)
+            filename_edit.set_focus()
+            filename_edit.set_edit_text("")  # 清空
+            filename_edit.type_keys(full_file_path, with_spaces=True)
+            time.sleep(1)
+
+            # 5. 精确查找标题完全匹配的“保存”按钮
+            save_button = dlg.child_window(title="保存(&S)", class_name="Button")
+            save_button.wait('enabled', timeout=5)
+            save_button.click_input()
+            self.update_status(f"已点击保存: {new_filename}")
+
+            # 6. 等待文件保存完成
             for _ in range(Config.FILE_SAVE_TIMEOUT * 2):
-                if os.path.exists(file_path) and os.path.getsize(file_path) > 1000:
+                if os.path.exists(full_file_path) and os.path.getsize(full_file_path) > 1024:
                     self.update_status(f"✅ 成功保存：{new_filename}")
                     return True
                 time.sleep(0.5)
 
-            logger.warning(f"⚠️ 文件保存超时：{new_filename}")
+            logger.warning(f"⚠️ 文件保存超时或文件过小：{new_filename}")
+            self.update_status(f"❌ 文件保存超时: {new_filename}")
             return False
 
-        except timings.TimeoutError:
-            self.update_status(f"❌ 未检测到 '{lang_tag}' 的保存对话框，跳过。")
+        except ElementAmbiguousError as e:
+            self.update_status(f"❌ 控件识别模糊，发现多个匹配项: {e}")
+            logger.error(f"控件识别模糊，发现多个匹配项: {e}", exc_info=True)
+            return False
+        except timings.TimeoutError as e:
+            self.update_status(f"❌ 在对话框内部查找控件时超时。")
+            logger.error(f"查找控件时超时: {e}", exc_info=True)
             return False
         except Exception as e:
-            self.update_status(f"❌ 处理保存对话框时出错：{e}")
+            self.update_status(f"❌ 处理保存对话框时发生未知错误：{e}")
+            logger.error(f"处理保存对话框时发生异常: {e}", exc_info=True)
             return False
 
     def _process_single_language(self, driver, btn_text, lang_tag, download_dir):

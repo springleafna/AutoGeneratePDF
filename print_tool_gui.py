@@ -39,6 +39,18 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
+# === 新增/恢复的关键函数 ===
+def resource_path(relative_path):
+    """ 获取资源的绝对路径，支持 PyInstaller 打包环境 """
+    if hasattr(sys, '_MEIPASS'):
+        # PyInstaller 会创建一个临时文件夹，并把路径存储在 _MEIPASS 中
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.abspath("."), relative_path)
+
+
+# ========================
+
+
 def create_date_folder_on_desktop():
     try:
         desktop = os.path.join(os.path.expanduser("~"), "Desktop")
@@ -61,7 +73,7 @@ def _clean_filename(name):
 class PrintToolApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("AutoGeneratePDF")
+        self.root.title("AutoGeneratePDF v3.2 - 打包修复版")
         self.root.geometry("700x550")
         self.root.resizable(True, True)
 
@@ -154,6 +166,7 @@ class PrintToolApp:
         self.root.after(100, self._process_next_url)
 
     def _setup_driver(self):
+        """ 配置并返回一个 Microsoft Edge WebDriver 实例 (为原生PDF打印优化) """
         self.update_status("配置 Edge 浏览器...")
         options = Options()
         options.add_argument("--headless")
@@ -163,13 +176,13 @@ class PrintToolApp:
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
         options.add_experimental_option('excludeSwitches', ['enable-logging'])
-        driver_path = "msedgedriver.exe"
-        if not os.path.exists(driver_path):
-            self.update_status(f"❌ 驱动文件未找到: {driver_path}！")
-            messagebox.showerror("错误", f"驱动文件 'msedgedriver.exe' 未找到！")
-            return None
+
+        # 使用 resource_path 函数来获取驱动的绝对路径，以兼容打包后的环境
+        driver_path = resource_path("msedgedriver.exe")
+
         self.update_status(f"使用本地 Edge WebDriver: {driver_path}")
         service = Service(executable_path=driver_path)
+
         self.update_status("启动 Edge 浏览器...")
         return webdriver.Edge(service=service, options=options)
 
@@ -253,6 +266,7 @@ class PrintToolApp:
             if driver:
                 driver.quit()
                 self.update_status("浏览器已关闭。")
+
 
 if __name__ == "__main__":
     root = tk.Tk()

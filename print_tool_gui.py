@@ -32,24 +32,15 @@ class Config:
     ]
     SELENIUM_TIMEOUT = 20
 
-
-# ============================================
-
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-
-# === 新增/恢复的关键函数 ===
 def resource_path(relative_path):
     """ 获取资源的绝对路径，支持 PyInstaller 打包环境 """
     if hasattr(sys, '_MEIPASS'):
         # PyInstaller 会创建一个临时文件夹，并把路径存储在 _MEIPASS 中
         return os.path.join(sys._MEIPASS, relative_path)
     return os.path.join(os.path.abspath("."), relative_path)
-
-
-# ========================
-
 
 def create_date_folder_on_desktop():
     try:
@@ -73,7 +64,7 @@ def _clean_filename(name):
 class PrintToolApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("AutoGeneratePDF v3.2 - 打包修复版")
+        self.root.title("AutoGeneratePDF")
         self.root.geometry("700x550")
         self.root.resizable(True, True)
 

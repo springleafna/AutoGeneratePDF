@@ -10,7 +10,6 @@ import re
 import sys
 import time
 import logging
-import json
 import base64
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -67,12 +66,32 @@ class PrintToolApp:
         self.root.title("AutoGeneratePDF")
         self.root.geometry("700x550")
         self.root.resizable(True, True)
+        # 隐藏窗口直到居中完成
+        self.root.withdraw()
 
         self.url_entries = []
         self.url_queue = []
         self.total_urls = 0
 
         self._setup_ui()
+
+        # 在界面初始化完成后居中并显示窗口
+        self.root.after(100, self._show_centered_window)
+
+    def _show_centered_window(self):
+        """居中并显示窗口"""
+        self.center_window()
+        self.root.deiconify()  # 显示窗口
+        self.root.focus_force()  # 获取焦点
+
+    def center_window(self):
+        """将窗口居中显示"""
+        self.root.update_idletasks()  # 确保获取到正确的窗口尺寸
+        width = self.root.winfo_width()
+        height = self.root.winfo_height()
+        x = (self.root.winfo_screenwidth() // 2) - (width // 2)
+        y = (self.root.winfo_screenheight() // 2) - (height // 2)
+        self.root.geometry(f"+{x}+{y}")
 
     def _add_url_entry(self, is_first=False):
         row_frame = ttk.Frame(self.url_list_frame)

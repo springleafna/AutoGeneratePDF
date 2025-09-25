@@ -81,7 +81,7 @@ class PrintToolApp:
     def __init__(self, root):
         self.root = root
         self.root.title("AutoGeneratePDF")
-        self.root.geometry("700x550")
+        self.root.geometry("650x600")
         self.root.resizable(True, True)
         # 隐藏窗口直到居中完成
         self.root.withdraw()
@@ -149,16 +149,21 @@ class PrintToolApp:
         self.start_btn.pack(side=tk.LEFT, padx=5)
         self.exit_btn = ttk.Button(button_frame, text="❌ 退出", command=self.root.quit)
         self.exit_btn.pack(side=tk.LEFT, padx=5)
-        self.status_var = tk.StringVar(value="请添加网址后开始任务...")
-        self.status_label = ttk.Label(main_frame, textvariable=self.status_var, wraplength=550, foreground="gray",
-                                      font=("微软雅黑", 9))
-        self.status_label.pack(pady=(10, 0))
+        # 创建一个只读的 Text 控件用于显示日志
+        self.status_text = tk.Text(main_frame, height=6, width=80, font=("微软雅黑", 9),
+                                   bg="white", fg="gray", state="disabled", relief="sunken")
+        self.status_text.pack(pady=(10, 0), fill=tk.X)
+
+        # 初始化内容
+        self._append_status("请添加网址后开始任务...")
         self._add_url_entry(is_first=True)
 
-    def update_status(self, message):
-        self.status_var.set(message)
-        logger.info(message)
-        self.root.update_idletasks()
+    def _append_status(self, message):
+        """向状态文本框追加一行信息，并自动滚动到底部"""
+        self.status_text.config(state="normal")
+        self.status_text.insert(tk.END, f"{message}\n")
+        self.status_text.see(tk.END)  # 滚动到最新行
+        self.status_text.config(state="disabled")
 
     def start_printing_all(self):
         urls = [entry.get().strip() for entry in self.url_entries if entry.get().strip()]
@@ -173,28 +178,28 @@ class PrintToolApp:
         self.total_urls = len(urls)
         self.start_btn.config(state="disabled")
         self.add_url_button.config(state="disabled")
-        self.update_status(f"🚀 任务队列已创建，共 {self.total_urls} 个任务。")
+        self._append_status(f"🚀 任务队列已创建，共 {self.total_urls} 个任务。")
         self.root.after(100, self._process_next_url)
 
     def _process_next_url(self):
         if not self.url_queue:
-            self.update_status("🎉 全部任务完成！请在桌面 'AutoGeneratePDF' 文件夹中查看结果。")
+            self._append_status("🎉 全部任务完成！请在桌面 'AutoGeneratePDF' 文件夹中查看结果。")
             messagebox.showinfo("成功", f"所有 {self.total_urls} 个打印任务已处理完毕！")
             self.start_btn.config(state="normal")
             self.add_url_button.config(state="normal")
             return
         current_url = self.url_queue.pop(0)
         task_num = self.total_urls - len(self.url_queue)
-        self.update_status(f"📄 开始处理第 {task_num} / {self.total_urls} 个任务: {current_url}")
+        self._append_status(f"📄 开始处理第 {task_num} / {self.total_urls} 个任务: {current_url}")
         success = self.run_print_job(current_url)
         if not success:
-            self.update_status(f"⚠️ 第 {task_num} 个任务处理失败，跳过...")
+            self._append_status(f"⚠️ 第 {task_num} 个任务处理失败，跳过...")
             logger.warning(f"任务 {current_url} 处理失败，已跳过。")
         self.root.after(100, self._process_next_url)
 
     def _setup_driver(self):
         """ 配置并返回一个 Microsoft Edge WebDriver 实例 (为原生PDF打印优化) """
-        self.update_status("配置 Edge 浏览器...")
+        self._append_status("配置 Edge 浏览器...")
         options = Options()
         options.add_argument("--headless")
         options.add_argument("--disable-gpu")
@@ -207,14 +212,14 @@ class PrintToolApp:
         # 使用 resource_path 函数来获取驱动的绝对路径，以兼容打包后的环境
         driver_path = resource_path("msedgedriver.exe")
 
-        self.update_status(f"使用本地 Edge WebDriver: {driver_path}")
+        self._append_status(f"使用本地 Edge WebDriver: {driver_path}")
         service = Service(executable_path=driver_path)
 
-        self.update_status("启动 Edge 浏览器...")
+        self._append_status("启动 Edge 浏览器...")
         return webdriver.Edge(service=service, options=options)
 
     def _process_single_language(self, driver, btn_text, lang_tag, download_dir):
-        self.update_status(f"正在处理：{btn_text}")
+        self._append_status(f"正在处理：{btn_text}")
         wait = WebDriverWait(driver, Config.SELENIUM_TIMEOUT)
         try:
             lang_button_xpath = f"//button[.//span[contains(text(), '{btn_text}')]]"
@@ -223,14 +228,14 @@ class PrintToolApp:
             time.sleep(2.5)
             page_title = driver.title
             base_filename = _clean_filename(page_title)
-            self.update_status(f"获取到原始文件名: {base_filename}")
+            self._append_status(f"获取到原始文件名: {base_filename}")
             if not base_filename:
                 base_filename = f"未命名文档_{datetime.now().strftime('%H%M%S')}"
             print_options = {
                 'landscape': False, 'displayHeaderFooter': False,
                 'printBackground': True, 'preferCSSPageSize': True,
             }
-            self.update_status("正在执行原生PDF生成命令...")
+            self._append_status("正在执行原生PDF生成命令...")
             result = driver.execute_cdp_cmd("Page.printToPDF", print_options)
             pdf_data = base64.b64decode(result['data'])
             new_filename = f"{base_filename}_{lang_tag}.pdf"
@@ -239,10 +244,10 @@ class PrintToolApp:
             with open(unique_file_path, 'wb') as f:
                 f.write(pdf_data)
             saved_name = os.path.basename(unique_file_path)
-            self.update_status(f"✅ 成功保存：{saved_name}")
+            self._append_status(f"✅ 成功保存：{saved_name}")
             return True
         except Exception as e:
-            self.update_status(f"❌ 处理 '{btn_text}' 时失败: {e}")
+            self._append_status(f"❌ 处理 '{btn_text}' 时失败: {e}")
             logger.error(f"处理 '{btn_text}' 时失败: {e}", exc_info=True)
             return False
 
@@ -253,32 +258,32 @@ class PrintToolApp:
             if not download_dir: return False
             driver = self._setup_driver()
             if not driver: return False
-            self.update_status(f"正在打开网页：{url}")
+            self._append_status(f"正在打开网页：{url}")
             driver.get(url)
             try:
                 wait = WebDriverWait(driver, Config.SELENIUM_TIMEOUT)
                 first_button_xpath = f"//button[.//span[contains(text(), '{Config.LANGUAGE_BUTTONS[0][0]}')]]"
                 wait.until(EC.visibility_of_element_located((By.XPATH, first_button_xpath)))
-                self.update_status("页面加载完成。")
+                self._append_status("页面加载完成。")
             except Exception as e:
-                self.update_status(f"❌ 等待页面初始元素超时。请检查网址。")
+                self._append_status(f"❌ 等待页面初始元素超时。请检查网址。")
                 logger.error(f"等待页面初始元素超时: {e}", exc_info=True)
                 return False
 
             try:
-                self.update_status("正在执行“预打印”以触发并稳定打印样式...")
+                self._append_status("正在执行“预打印”以触发并稳定打印样式...")
                 print_options = {
                     'landscape': False, 'displayHeaderFooter': False,
                     'printBackground': True, 'preferCSSPageSize': True,
                 }
                 driver.execute_cdp_cmd("Page.printToPDF", print_options)
                 time.sleep(3)
-                self.update_status("预打印完成，打印引擎已就绪。")
+                self._append_status("预打印完成，打印引擎已就绪。")
             except Exception as e:
-                self.update_status(f"⚠️ 预打印失败: {e}。将继续尝试...")
+                self._append_status(f"⚠️ 预打印失败: {e}。将继续尝试...")
                 logger.warning(f"预打印失败: {e}", exc_info=True)
 
-            self.update_status("开始处理语言版本...")
+            self._append_status("开始处理语言版本...")
             all_langs_successful = True
             for btn_text, lang_tag in Config.LANGUAGE_BUTTONS:
                 success = self._process_single_language(driver, btn_text, lang_tag, download_dir)
@@ -288,13 +293,13 @@ class PrintToolApp:
             return all_langs_successful
         except Exception as e:
             error_message = f"❌ 执行过程中发生严重错误：{str(e)}"
-            self.update_status(error_message)
+            self._append_status(error_message)
             logger.error(error_message, exc_info=True)
             return False
         finally:
             if driver:
                 driver.quit()
-                self.update_status("浏览器已关闭。")
+                self._append_status("浏览器已关闭。")
 
 
 if __name__ == "__main__":

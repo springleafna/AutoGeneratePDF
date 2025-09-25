@@ -112,14 +112,14 @@ class PrintToolApp:
 
     def _add_url_entry(self, is_first=False):
         row_frame = ttk.Frame(self.url_list_frame)
-        row_frame.pack(fill=tk.X, pady=2)
+        row_frame.pack(fill="x", pady=2)
         entry = ttk.Entry(row_frame, width=60, font=("微软雅黑", 10))
-        entry.pack(side=tk.LEFT, expand=True, fill=tk.X)
+        entry.pack(side="left", expand=True, fill="x")
         self.url_entries.append(entry)
         if not is_first:
             remove_btn = ttk.Button(row_frame, text="-", width=3,
                                     command=lambda rf=row_frame, en=entry: self._remove_url_entry(rf, en))
-            remove_btn.pack(side=tk.LEFT, padx=(5, 0))
+            remove_btn.pack(side="left", padx=(5, 0))
 
     def _remove_url_entry(self, frame_to_remove, entry_to_remove):
         frame_to_remove.destroy()
@@ -127,13 +127,13 @@ class PrintToolApp:
 
     def _setup_ui(self):
         main_frame = ttk.Frame(self.root, padding="20")
-        main_frame.pack(fill=tk.BOTH, expand=True)
+        main_frame.pack(fill="both", expand=True)
         title_label = ttk.Label(main_frame, text="📚 AutoGeneratePDF", font=("微软雅黑", 16, "bold"))
         title_label.pack(pady=(0, 10))
         url_area_frame = ttk.LabelFrame(main_frame, text=" 网址列表 ", padding=10)
-        url_area_frame.pack(fill=tk.X, pady=10)
+        url_area_frame.pack(fill="x", pady=10)
         add_btn = ttk.Button(url_area_frame, text="✚ 添加网址", command=self._add_url_entry)
-        add_btn.pack(anchor=tk.W, pady=(0, 10))
+        add_btn.pack(anchor="w", pady=(0, 10))
         self.add_url_button = add_btn
         canvas = tk.Canvas(url_area_frame, borderwidth=0, background="#ffffff")
         self.url_list_frame = ttk.Frame(canvas)
@@ -146,13 +146,13 @@ class PrintToolApp:
         button_frame = ttk.Frame(main_frame)
         button_frame.pack(pady=10)
         self.start_btn = ttk.Button(button_frame, text="✅ 开始打印", command=self.start_printing_all)
-        self.start_btn.pack(side=tk.LEFT, padx=5)
+        self.start_btn.pack(side="left", padx=5)
         self.exit_btn = ttk.Button(button_frame, text="❌ 退出", command=self.root.quit)
-        self.exit_btn.pack(side=tk.LEFT, padx=5)
+        self.exit_btn.pack(side="left", padx=5)
         # 创建一个只读的 Text 控件用于显示日志
         self.status_text = tk.Text(main_frame, height=6, width=80, font=("微软雅黑", 9),
                                    bg="white", fg="gray", state="disabled", relief="sunken")
-        self.status_text.pack(pady=(10, 0), fill=tk.X)
+        self.status_text.pack(pady=(10, 0), fill="x")
 
         # 初始化内容
         self._append_status("请添加网址后开始任务...")
@@ -213,7 +213,7 @@ class PrintToolApp:
         driver_path = resource_path("msedgedriver.exe")
 
         self._append_status(f"使用本地 Edge WebDriver: {driver_path}")
-        service = Service(executable_path=driver_path)
+        service = Service(executable_path=str(driver_path))
 
         self._append_status("启动 Edge 浏览器...")
         return webdriver.Edge(service=service, options=options)

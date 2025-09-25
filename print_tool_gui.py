@@ -60,6 +60,23 @@ def _clean_filename(name):
     return re.sub(r'[\\/*?:"<>|]', '_', name).strip()
 
 
+def get_unique_filepath(base_path):
+    """
+    确保文件路径唯一：如果文件已存在，则在文件名后添加 (1), (2), ...
+    例如：report_中文.pdf → report_中文(1).pdf → report_中文(2).pdf
+    """
+    if not os.path.exists(base_path):
+        return base_path
+
+    root, ext = os.path.splitext(base_path)
+    counter = 1
+    while True:
+        new_path = f"{root}({counter}){ext}"
+        if not os.path.exists(new_path):
+            return new_path
+        counter += 1
+
+
 class PrintToolApp:
     def __init__(self, root):
         self.root = root
@@ -218,9 +235,11 @@ class PrintToolApp:
             pdf_data = base64.b64decode(result['data'])
             new_filename = f"{base_filename}_{lang_tag}.pdf"
             full_file_path = os.path.join(download_dir, new_filename)
-            with open(full_file_path, 'wb') as f:
+            unique_file_path = get_unique_filepath(full_file_path)
+            with open(unique_file_path, 'wb') as f:
                 f.write(pdf_data)
-            self.update_status(f"✅ 成功保存：{new_filename}")
+            saved_name = os.path.basename(unique_file_path)
+            self.update_status(f"✅ 成功保存：{saved_name}")
             return True
         except Exception as e:
             self.update_status(f"❌ 处理 '{btn_text}' 时失败: {e}")

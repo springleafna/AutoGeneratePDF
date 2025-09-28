@@ -149,6 +149,8 @@ class PrintToolApp:
         self.start_btn.pack(side="left", padx=5)
         self.exit_btn = ttk.Button(button_frame, text="❌ 退出", command=self.root.quit)
         self.exit_btn.pack(side="left", padx=5)
+        self.help_btn = ttk.Button(button_frame, text="📘 操作指南", command=self._show_help)
+        self.help_btn.pack(side="left", padx=5)
         # 创建一个只读的 Text 控件用于显示日志
         self.status_text = tk.Text(main_frame, height=6, width=80, font=("微软雅黑", 9),
                                    bg="white", fg="gray", state="disabled", relief="sunken")
@@ -301,6 +303,130 @@ class PrintToolApp:
                 driver.quit()
                 self._append_status("浏览器已关闭。")
 
+    def _show_help(self):
+        """弹出富文本操作指南窗口"""
+        help_window = tk.Toplevel(self.root)
+        help_window.title("📘 操作指南")
+        help_window.geometry("550x450")
+        help_window.resizable(True, True)
+        help_window.transient(self.root)
+        help_window.grab_set()
+
+        # 先隐藏窗口，避免闪现左上角
+        help_window.withdraw()
+
+        # 主框架
+        main_frame = ttk.Frame(help_window, padding=10)
+        main_frame.pack(fill="both", expand=True)
+
+        # 创建 Text 和 Scrollbar
+        text_widget = tk.Text(
+            main_frame,
+            wrap="word",
+            font=("微软雅黑", 10),
+            bg="white",
+            relief="sunken",
+            padx=10,
+            pady=10
+        )
+        scrollbar = ttk.Scrollbar(main_frame, orient="vertical", command=text_widget.yview)
+        text_widget.configure(yscrollcommand=scrollbar.set)
+
+        text_widget.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        # 配置富文本样式（tags）
+        text_widget.tag_configure("title", font=("微软雅黑", 14, "bold"), foreground="#1E88E5", spacing3=10)
+        text_widget.tag_configure("section", font=("微软雅黑", 11, "bold"), foreground="#333333", spacing2=6,
+                                  spacing3=8)
+        text_widget.tag_configure("body", font=("微软雅黑", 10), foreground="#000000", lmargin1=20, lmargin2=30)
+        text_widget.tag_configure("bullet", font=("微软雅黑", 10), foreground="#000000", lmargin1=20, lmargin2=30)
+        text_widget.tag_configure("note", font=("微软雅黑", 10, "bold"), foreground="#D32F2F")
+        text_widget.tag_configure("path", font=("Consolas", 9), background="#F5F5F5", relief="groove", borderwidth=1)
+
+        # 插入内容的辅助函数
+        def insert_title(text):
+            text_widget.insert("end", text + "\n", "title")
+
+        def insert_section(text):
+            text_widget.insert("end", text + "\n", "section")
+
+        def insert_body(text):
+            text_widget.insert("end", text + "\n", "body")
+
+        def insert_bullet(text):
+            text_widget.insert("end", "• " + text + "\n", "bullet")
+
+        def insert_note(text):
+            text_widget.insert("end", text + "\n", "note")
+
+        def insert_path(text):
+            text_widget.insert("end", text, "path")
+
+        # 插入内容
+        insert_title("AutoGeneratePDF 使用指南")
+
+        insert_section("📌 基本流程")
+        insert_bullet("点击「✚ 添加网址」可添加多个待处理网页。")
+        insert_bullet("每个网址必须以 http:// 或 https:// 开头。")
+        insert_bullet("点击「✅ 开始打印」后，程序将自动：")
+        insert_body("  - 打开每个网页（使用 Edge 浏览器）")
+        insert_body("  - 依次点击“打印中英文”、“打印英文”、“打印中文”三个按钮")
+        insert_body("  - 将每个语言版本生成 PDF 并保存到桌面的 AutoGeneratePDF/日期 文件夹中")
+
+        insert_section("📌 注意事项")
+        insert_bullet("网页必须包含以下按钮之一（按钮内含 span 文本）：")
+        insert_body("  • \"打印中英文\"")
+        insert_body("  • \"打印英文\"")
+        insert_body("  • \"打印中文\"")
+        insert_bullet("首次运行可能较慢（需加载浏览器），请耐心等待。")
+        insert_bullet("若某任务失败，程序会跳过并继续处理下一个。")
+        insert_bullet("运行时不要关闭窗口，直到出现“全部任务完成”弹窗。")
+
+        insert_section("📌 输出位置")
+        insert_body("所有 PDF 文件将保存在：")
+        insert_path("桌面 → AutoGeneratePDF → YYMMDD（当天日期文件夹）")
+        text_widget.insert("end", "\n\n", "body")
+
+        insert_section("📌 常见问题")
+        insert_note("Q: 点击开始后没反应？")
+        insert_body("A: 请检查是否安装了 Microsoft Edge 浏览器，并确认 Edge 浏览器版本为：140.0.3485.66 (正式版本) (64 位)。")
+
+        insert_note("Q: 如何查看 Edge 浏览器版本？")
+        insert_body("A: 在 Edge 浏览器网址栏输入 edge://settings/help 查看具体版本号。")
+
+        insert_note("Q: 保存的文件名乱码或为空？")
+        insert_body("A: 网页标题可能为空，程序会自动生成时间戳文件名。\n")
+
+        insert_body("如有问题，请联系作者：")
+        insert_note("springleaf")
+
+        text_widget.config(state="disabled")
+
+        # 关闭按钮
+        close_btn = ttk.Button(help_window, text="关闭", command=help_window.destroy)
+        close_btn.pack(pady=10)
+
+        # ===== 居中逻辑 =====
+        def center_and_show():
+            help_window.update_idletasks()  # 强制更新布局
+            width = help_window.winfo_width()
+            height = help_window.winfo_height()
+
+            # 确保最小尺寸
+            width = max(width, 550)
+            height = max(height, 450)
+
+            screen_width = help_window.winfo_screenwidth()
+            screen_height = help_window.winfo_screenheight()
+            x = (screen_width - width) // 2
+            y = (screen_height - height) // 2
+
+            help_window.geometry(f"{width}x{height}+{x}+{y}")
+            help_window.deiconify()  # 此时才显示窗口
+
+        # 立即执行（无需延迟，因为窗口已构建完成）
+        center_and_show()
 
 if __name__ == "__main__":
     root = tk.Tk()

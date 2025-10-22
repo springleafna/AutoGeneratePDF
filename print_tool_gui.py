@@ -176,28 +176,41 @@ class PrintToolApp:
             if not url.startswith(("http://", "https://")):
                 messagebox.showerror("错误", f"网址格式不正确：\n{url}")
                 return
+
         self.url_queue = urls
         self.total_urls = len(urls)
         self.start_btn.config(state="disabled")
         self.add_url_button.config(state="disabled")
         self._append_status(f"🚀 任务队列已创建，共 {self.total_urls} 个任务。")
-        self.root.after(100, self._process_next_url)
 
-    def _process_next_url(self):
-        if not self.url_queue:
+        # 启动一次浏览器，传入后续任务
+        self.root.after(100, lambda: self._process_all_urls())
+
+    def _process_all_urls(self):
+        driver = None
+        try:
+            driver = self._setup_driver()
+            while self.url_queue:
+                current_url = self.url_queue.pop(0)
+                task_num = self.total_urls - len(self.url_queue)
+                self._append_status(f"📄 开始处理第 {task_num} / {self.total_urls} 个任务: {current_url}")
+                success = self._run_print_job_for_url(driver, current_url)
+                if not success:
+                    self._append_status(f"⚠️ 第 {task_num} 个任务处理失败，跳过...")
+                    logger.warning(f"任务 {current_url} 处理失败，已跳过。")
+                # 不 sleep，直接下一个（或加极短延迟防卡）
+                self.root.update()  # 保持 GUI 响应
             self._append_status("🎉 全部任务完成！请在桌面 'AutoGeneratePDF' 文件夹中查看结果。")
             messagebox.showinfo("成功", f"所有 {self.total_urls} 个打印任务已处理完毕！")
+        except Exception as e:
+            logger.error(f"全局任务异常: {e}", exc_info=True)
+            self._append_status(f"❌ 全局错误：{e}")
+        finally:
+            if driver:
+                driver.quit()
+                self._append_status("浏览器已关闭。")
             self.start_btn.config(state="normal")
             self.add_url_button.config(state="normal")
-            return
-        current_url = self.url_queue.pop(0)
-        task_num = self.total_urls - len(self.url_queue)
-        self._append_status(f"📄 开始处理第 {task_num} / {self.total_urls} 个任务: {current_url}")
-        success = self.run_print_job(current_url)
-        if not success:
-            self._append_status(f"⚠️ 第 {task_num} 个任务处理失败，跳过...")
-            logger.warning(f"任务 {current_url} 处理失败，已跳过。")
-        self.root.after(100, self._process_next_url)
 
     def _setup_driver(self):
         """ 配置并返回一个 Microsoft Edge WebDriver 实例 (为原生PDF打印优化) """
@@ -253,55 +266,45 @@ class PrintToolApp:
             logger.error(f"处理 '{btn_text}' 时失败: {e}", exc_info=True)
             return False
 
-    def run_print_job(self, url):
-        driver = None
+    def _run_print_job_for_url(self, driver, url):
+        """在已有 driver 上处理单个 URL"""
         try:
             download_dir = create_date_folder_on_desktop()
-            if not download_dir: return False
-            driver = self._setup_driver()
-            if not driver: return False
-            self._append_status(f"正在打开网页：{url}")
-            driver.get(url)
-            try:
-                wait = WebDriverWait(driver, Config.SELENIUM_TIMEOUT)
-                first_button_xpath = f"//button[.//span[contains(text(), '{Config.LANGUAGE_BUTTONS[0][0]}')]]"
-                wait.until(EC.visibility_of_element_located((By.XPATH, first_button_xpath)))
-                self._append_status("页面加载完成。")
-            except Exception as e:
-                self._append_status(f"❌ 等待页面初始元素超时。请检查网址。")
-                logger.error(f"等待页面初始元素超时: {e}", exc_info=True)
+            if not download_dir:
                 return False
 
+            self._append_status(f"正在打开网页：{url}")
+            driver.get(url)
+
+            # 等待关键按钮出现（用 WebDriverWait，不用 sleep）
+            wait = WebDriverWait(driver, Config.SELENIUM_TIMEOUT)
+            first_button_xpath = f"//button[.//span[contains(text(), '{Config.LANGUAGE_BUTTONS[0][0]}')]]"
+            wait.until(EC.visibility_of_element_located((By.XPATH, first_button_xpath)))
+            self._append_status("页面加载完成。")
+
+            # 预打印（可选，若非必要可删除）
             try:
-                self._append_status("正在执行“预打印”以触发并稳定打印样式...")
                 print_options = {
                     'landscape': False, 'displayHeaderFooter': False,
                     'printBackground': True, 'preferCSSPageSize': True,
                 }
                 driver.execute_cdp_cmd("Page.printToPDF", print_options)
-                time.sleep(3)
-                self._append_status("预打印完成，打印引擎已就绪。")
+                self._append_status("预打印完成。")
             except Exception as e:
-                self._append_status(f"⚠️ 预打印失败: {e}。将继续尝试...")
-                logger.warning(f"预打印失败: {e}", exc_info=True)
+                logger.warning(f"预打印失败: {e}")
 
-            self._append_status("开始处理语言版本...")
-            all_langs_successful = True
+            # 处理三种打印情况
+            all_success = True
             for btn_text, lang_tag in Config.LANGUAGE_BUTTONS:
                 success = self._process_single_language(driver, btn_text, lang_tag, download_dir)
                 if not success:
-                    all_langs_successful = False
-                time.sleep(2)
-            return all_langs_successful
+                    all_success = False
+                # 可考虑移除或缩短 sleep
+                time.sleep(0.5)  # 极短延迟，防点击过快
+            return all_success
         except Exception as e:
-            error_message = f"❌ 执行过程中发生严重错误：{str(e)}"
-            self._append_status(error_message)
-            logger.error(error_message, exc_info=True)
+            logger.error(f"处理 {url} 时出错: {e}", exc_info=True)
             return False
-        finally:
-            if driver:
-                driver.quit()
-                self._append_status("浏览器已关闭。")
 
     def _show_help(self):
         """弹出富文本操作指南窗口"""

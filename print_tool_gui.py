@@ -11,6 +11,7 @@ import sys
 import time
 import logging
 import base64
+import threading
 import tkinter as tk
 from tkinter import ttk, messagebox
 from selenium import webdriver
@@ -94,6 +95,8 @@ class PrintToolApp:
 
         # 在界面初始化完成后居中并显示窗口
         self.root.after(100, self._show_centered_window)
+        # 增加一个变量控制线程停止
+        self.is_running = False
 
     def _show_centered_window(self):
         """居中并显示窗口"""
@@ -161,11 +164,19 @@ class PrintToolApp:
         self._add_url_entry(is_first=True)
 
     def _append_status(self, message):
-        """向状态文本框追加一行信息，并自动滚动到底部"""
-        self.status_text.config(state="normal")
-        self.status_text.insert(tk.END, f"{message}\n")
-        self.status_text.see(tk.END)  # 滚动到最新行
-        self.status_text.config(state="disabled")
+        """
+        线程安全的日志更新方法。
+        子线程调用此方法时，会通过 root.after 将实际 UI 操作推送到主线程执行。
+        """
+        def _update():
+            """向状态文本框追加一行信息，并自动滚动到底部"""
+            self.status_text.config(state="normal")
+            self.status_text.insert(tk.END, f"{message}\n")
+            self.status_text.see(tk.END)  # 滚动到最新行
+            self.status_text.config(state="disabled")
+
+        # 0毫秒后在主线程执行 _update
+        self.root.after(0, _update)
 
     def start_printing_all(self):
         urls = [entry.get().strip() for entry in self.url_entries if entry.get().strip()]
@@ -183,25 +194,36 @@ class PrintToolApp:
         self.add_url_button.config(state="disabled")
         self._append_status(f"🚀 任务队列已创建，共 {self.total_urls} 个任务。")
 
-        # 启动一次浏览器，传入后续任务
-        self.root.after(100, lambda: self._process_all_urls())
+        # 启动一次浏览器，传入后续任务。使用线程启动任务，而不是直接调用
+        self.is_running = True
+        thread = threading.Thread(target=self._process_all_urls)
+        thread.daemon = True  # 设置为守护线程，关闭主窗口时线程也会强制结束
+        thread.start()
 
     def _process_all_urls(self):
+        """此函数在后台线程运行，不会卡住界面"""
         driver = None
         try:
             driver = self._setup_driver()
-            while self.url_queue:
-                current_url = self.url_queue.pop(0)
-                task_num = self.total_urls - len(self.url_queue)
+
+            # 使用副本遍历，防止队列修改问题
+            queue_copy = list(self.url_queue)
+
+            for index, current_url in enumerate(queue_copy):
+                if not self.is_running: break  # 允许中途停止
+
+                task_num = index + 1
                 self._append_status(f"📄 开始处理第 {task_num} / {self.total_urls} 个任务: {current_url}")
+
                 success = self._run_print_job_for_url(driver, current_url)
+
                 if not success:
                     self._append_status(f"⚠️ 第 {task_num} 个任务处理失败，跳过...")
-                    logger.warning(f"任务 {current_url} 处理失败，已跳过。")
-                # 不 sleep，直接下一个（或加极短延迟防卡）
-                self.root.update()  # 保持 GUI 响应
+
             self._append_status("🎉 全部任务完成！请在桌面 'AutoGeneratePDF' 文件夹中查看结果。")
-            messagebox.showinfo("成功", f"所有 {self.total_urls} 个打印任务已处理完毕！")
+            # 弹窗必须在主线程
+            self.root.after(0, lambda: messagebox.showinfo("成功", f"所有任务已处理完毕！"))
+
         except Exception as e:
             logger.error(f"全局任务异常: {e}", exc_info=True)
             self._append_status(f"❌ 全局错误：{e}")
@@ -209,8 +231,17 @@ class PrintToolApp:
             if driver:
                 driver.quit()
                 self._append_status("浏览器已关闭。")
-            self.start_btn.config(state="normal")
-            self.add_url_button.config(state="normal")
+
+            # 恢复按钮状态 (必须回到主线程操作)
+            self.root.after(0, self._reset_ui_state)
+
+    def _reset_ui_state(self):
+        """ 恢复界面按钮状态的函数 """
+        # 恢复按钮可用
+        self.start_btn.config(state="normal")
+        self.add_url_button.config(state="normal")
+        if hasattr(self, 'is_running'):
+            self.is_running = False
 
     def _setup_driver(self):
         """ 配置并返回一个 Microsoft Edge WebDriver 实例 (为原生PDF打印优化) """
@@ -280,18 +311,10 @@ class PrintToolApp:
             wait = WebDriverWait(driver, Config.SELENIUM_TIMEOUT)
             first_button_xpath = f"//button[.//span[contains(text(), '{Config.LANGUAGE_BUTTONS[0][0]}')]]"
             wait.until(EC.visibility_of_element_located((By.XPATH, first_button_xpath)))
-            self._append_status("页面加载完成。")
 
-            # 预打印（可选，若非必要可删除）
-            try:
-                print_options = {
-                    'landscape': False, 'displayHeaderFooter': False,
-                    'printBackground': True, 'preferCSSPageSize': True,
-                }
-                driver.execute_cdp_cmd("Page.printToPDF", print_options)
-                self._append_status("预打印完成。")
-            except Exception as e:
-                logger.warning(f"预打印失败: {e}")
+            # 确认页面完全加载
+            driver.execute_script("return document.readyState == 'complete'")
+            self._append_status("页面加载完成。")
 
             # 处理三种打印情况
             all_success = True

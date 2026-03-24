@@ -416,7 +416,7 @@ class PrintToolApp:
 
         insert_section("📌 常见问题")
         insert_note("Q: 点击开始后没反应？")
-        insert_body("A: 请检查是否安装了 Microsoft Edge 浏览器，并确认 Edge 浏览器版本为：144.0.3719.82 (正式版本) (64 位)。")
+        insert_body("A: 请检查是否安装了 Microsoft Edge 浏览器，并确认 Edge 浏览器版本为：146.0.3856.78 (正式版本) (64 位)。")
 
         insert_note("Q: 如何查看 Edge 浏览器版本？")
         insert_body("A: 在 Edge 浏览器网址栏输入 edge://settings/help 查看具体版本号。")

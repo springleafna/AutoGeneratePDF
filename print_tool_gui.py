@@ -152,6 +152,8 @@ class PrintToolApp:
         self.start_btn.pack(side="left", padx=5)
         self.exit_btn = ttk.Button(button_frame, text="❌ 退出", command=self.root.quit)
         self.exit_btn.pack(side="left", padx=5)
+        self.open_folder_btn = ttk.Button(button_frame, text="📂 打开文件夹", command=self._open_save_folder)
+        self.open_folder_btn.pack(side="left", padx=5)
         self.help_btn = ttk.Button(button_frame, text="📘 操作指南", command=self._show_help)
         self.help_btn.pack(side="left", padx=5)
         # 创建一个只读的 Text 控件用于显示日志
@@ -328,6 +330,18 @@ class PrintToolApp:
         except Exception as e:
             logger.error(f"处理 {url} 时出错: {e}", exc_info=True)
             return False
+
+    def _open_save_folder(self):
+        """打开保存PDF的文件夹"""
+        try:
+            desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+            base_folder = os.path.join(desktop, "AutoGeneratePDF")
+            if os.path.exists(base_folder):
+                os.startfile(base_folder)
+            else:
+                messagebox.showinfo("提示", f"文件夹尚未创建\n首次打印时会自动创建：\n{base_folder}")
+        except Exception as e:
+            messagebox.showerror("错误", f"打开文件夹失败：{e}")
 
     def _show_help(self):
         """弹出富文本操作指南窗口"""

@@ -442,6 +442,28 @@ class PrintToolApp:
         )
         self.status_text.pack(pady=(10, 0), fill="x")
 
+    # ==================== 右键粘贴 ====================
+
+    def _paste_on_right_click(self, event: tk.Event) -> str:
+        """
+        右键点击输入框时，直接将剪贴板内容粘贴到光标位置
+
+        Args:
+            event: 鼠标事件
+        """
+        widget = event.widget
+        try:
+            self.root.clipboard_get()
+        except tk.TclError:
+            return "break"
+
+        try:
+            widget.focus_set()
+            widget.event_generate("<<Paste>>")
+        except Exception as e:
+            logger.warning(f"右键粘贴失败: {e}")
+        return "break"
+
     # ==================== 网址管理 ====================
 
     def _add_url_entry(self, is_first: bool = False) -> None:
@@ -460,6 +482,11 @@ class PrintToolApp:
             font=(Config.UI.FONT_FAMILY, Config.UI.FONT_SIZE_NORMAL)
         )
         entry.pack(side="left", expand=True, fill="x")
+
+        # 右键直接粘贴剪贴板内容（Windows/Linux 为 <Button-3>，macOS 为 <Button-2>）
+        entry.bind("<Button-3>", self._paste_on_right_click)
+        entry.bind("<Button-2>", self._paste_on_right_click)
+
         self.url_entries.append(entry)
 
         if not is_first:

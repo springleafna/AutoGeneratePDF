@@ -112,7 +112,8 @@ class PrintConfig:
         default_factory=lambda: (
             ("打印中英文", "中英文"),
             ("打印英文", "英文"),
-            ("打印中文", "中文")
+            ("打印中文", "中文"),
+            ("打印音标", "音标")
         )
     )
     MAX_RETRIES: int = 2  # 单个任务最大重试次数
@@ -666,7 +667,10 @@ class PrintToolApp:
 
                 # 等待页面加载
                 wait = WebDriverWait(driver, Config.BROWSER.SELENIUM_TIMEOUT)
-                first_button_xpath = f"//button[.//span[contains(text(), '{Config.PRINT.LANGUAGE_BUTTONS[0][0]}')]]"
+                first_button_xpath = (
+                    f"//button[contains(normalize-space(.), "
+                    f"'{Config.PRINT.LANGUAGE_BUTTONS[0][0]}')]"
+                )
 
                 try:
                     wait.until(EC.visibility_of_element_located((By.XPATH, first_button_xpath)))
@@ -746,7 +750,9 @@ class PrintToolApp:
 
         try:
             # 查找并点击按钮
-            lang_button_xpath = f"//button[.//span[contains(text(), '{btn_text}')]]"
+            lang_button_xpath = (
+                f"//button[contains(normalize-space(.), '{btn_text}')]"
+            )
             lang_button = wait.until(
                 EC.element_to_be_clickable((By.XPATH, lang_button_xpath))
             )
@@ -950,19 +956,23 @@ class PrintToolApp:
         text_widget.insert("end", "• 每个网址必须以 http:// 或 https:// 开头。\n", "bullet")
         text_widget.insert("end", "• 点击「✅ 开始打印」后，程序将自动：\n", "bullet")
         text_widget.insert("end", "  - 打开每个网页（使用 Edge 浏览器）\n", "body")
-        text_widget.insert("end", "  - 依次点击‘打印中英文’、‘打印英文’、‘打印中文’三个按钮\n", "body")
+        text_widget.insert("end", "  - 依次点击‘打印中英文’、‘打印英文’、‘打印中文’、‘打印音标’四个按钮\n", "body")
+        text_widget.insert("end", "  - 直接导出对应 PDF，无需手动点击‘在线打印’\n", "body")
         text_widget.insert("end", "  - 将每个语言版本生成 PDF 并保存到桌面的 AutoGeneratePDF/日期 文件夹中\n", "body")
 
         text_widget.insert("end", "\n📌 注意事项\n", "section")
-        text_widget.insert("end", "• 网页必须包含打印按钮（打印中英文/打印英文/打印中文）\n", "bullet")
+        text_widget.insert("end", "• 网页必须包含打印按钮（打印中英文/打印英文/打印中文/打印音标）\n", "bullet")
         text_widget.insert("end", "• 首次运行可能较慢（需加载浏览器），请耐心等待\n", "bullet")
         text_widget.insert("end", "• 若某任务失败，程序会自动重试2次后跳过\n", "bullet")
         text_widget.insert("end", "• 运行时不要关闭窗口，直到出现‘全部任务完成’弹窗\n", "bullet")
+        text_widget.insert("end", "• 如果浏览器启动失败，请检查 msedgedriver.exe 是否和 Edge 浏览器版本匹配\n", "bullet")
 
         text_widget.insert("end", "\n📌 输出位置\n", "section")
         text_widget.insert("end", "所有 PDF 文件将保存在：\n", "body")
         text_widget.insert("end", "桌面 → AutoGeneratePDF → YYMMDD（当天日期文件夹）", "path")
         text_widget.insert("end", "\n\n", "body")
+        text_widget.insert("end", "每个网址通常会生成四个文件：中英文、英文、中文、音标。\n", "body")
+        text_widget.insert("end", "如果同名文件已存在，程序会自动追加 (1)、(2) 等编号，避免覆盖旧文件。\n", "body")
 
         text_widget.insert("end", "📌 常见问题\n", "section")
         text_widget.insert("end", "Q: 点击开始后没反应？\n", "note")
@@ -970,6 +980,9 @@ class PrintToolApp:
 
         text_widget.insert("end", "Q: 如何查看 Edge 浏览器版本？\n", "note")
         text_widget.insert("end", "A: 在 Edge 浏览器网址栏输入 edge://settings/help\n\n", "body")
+
+        text_widget.insert("end", "Q: 为什么只能生成部分 PDF？\n", "note")
+        text_widget.insert("end", "A: 请确认网页四个打印按钮都能正常显示，并保持网络连接稳定\n\n", "body")
 
         text_widget.insert("end", "如有问题，请联系作者：springleaf\n", "note")
 

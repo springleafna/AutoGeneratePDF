@@ -5,7 +5,6 @@ AutoGeneratePDF - 图形界面版
 用途：唤唤专用
 """
 
-import base64
 import logging
 import os
 import re
@@ -13,10 +12,11 @@ import sys
 import threading
 import time
 import tkinter as tk
-from dataclasses import dataclass, field
+import zipfile
+from dataclasses import dataclass
 from datetime import datetime
 from tkinter import ttk, messagebox
-from typing import Optional, List, Tuple, Any
+from typing import Optional, List, Any
 
 from selenium import webdriver
 from selenium.common.exceptions import (
@@ -47,8 +47,13 @@ class ButtonNotFoundError(PrintTaskError):
     pass
 
 
-class PDFGenerationError(PrintTaskError):
-    """PDF生成失败异常"""
+class DownloadTimeoutError(PrintTaskError):
+    """压缩包下载超时异常"""
+    pass
+
+
+class ZIPExtractionError(PrintTaskError):
+    """压缩包解压失败异常"""
     pass
 
 
@@ -85,8 +90,6 @@ class BrowserConfig:
     """浏览器配置"""
     DRIVER_FILENAME: str = "msedgedriver.exe"
     SELENIUM_TIMEOUT: int = 20
-    PAGE_LOAD_WAIT: float = 2.5  # 点击按钮后等待页面响应的时间
-    BETWEEN_CLICKS_DELAY: float = 0.5  # 两次点击之间的延迟
     WINDOW_SIZE: str = "1920,1080"
     HEADLESS: bool = True
     DISABLE_GPU: bool = True
@@ -100,33 +103,17 @@ class PathConfig:
     """路径配置"""
     BASE_FOLDER_NAME: str = "AutoGeneratePDF"
     DATE_FORMAT: str = "%y%m%d"
-    TIME_FORMAT: str = "%H%M%S"
-    DEFAULT_FILENAME_PREFIX: str = "未命名文档"
     DESKTOP_RELATIVE_PATH: str = "Desktop"
 
 
-@dataclass
+@dataclass(frozen=True)
 class PrintConfig:
     """打印配置"""
-    LANGUAGE_BUTTONS: Tuple[Tuple[str, str], ...] = field(
-        default_factory=lambda: (
-            ("打印中英文", "中英文"),
-            ("打印英文", "英文"),
-            ("打印中文", "中文"),
-            ("打印音标", "音标")
-        )
-    )
+    EXPORT_BUTTON_TEXT: str = "一键导出PDF"  # 网页上一键导出按钮的文字
+    EXPECTED_PDF_COUNT: int = 4  # 每个压缩包内预期的PDF数量（中文/英文/中英文/音标）
     MAX_RETRIES: int = 2  # 单个任务最大重试次数
-
-    @staticmethod
-    def get_pdf_options() -> dict:
-        """获取PDF打印选项"""
-        return {
-            'landscape': False,
-            'displayHeaderFooter': False,
-            'printBackground': True,
-            'preferCSSPageSize': True,
-        }
+    DOWNLOAD_TIMEOUT: float = 60.0  # 等待压缩包下载完成的超时时间（秒）
+    DOWNLOAD_POLL_INTERVAL: float = 0.5  # 下载轮询间隔（秒）
 
 
 class Config:
@@ -149,48 +136,20 @@ logger = logging.getLogger(__name__)
 # ========== 工具函数 ==========
 
 def resource_path(relative_path: str) -> str:
-    """
-    获取资源的绝对路径，支持 PyInstaller 打包环境
-
-    Args:
-        relative_path: 相对路径
-
-    Returns:
-        绝对路径
-    """
+    """获取资源的绝对路径（兼容 PyInstaller 打包环境）"""
     if hasattr(sys, '_MEIPASS'):
-        # noqa: SLF001 - _MEIPASS 是 PyInstaller 的标准属性，需要访问
+        # noqa: SLF001
         return os.path.join(sys._MEIPASS, relative_path)
     return os.path.join(os.path.abspath("."), relative_path)
 
 
 def clean_filename(name: str) -> str:
-    """
-    清理文件名，移除非法字符
-
-    Args:
-        name: 原始文件名
-
-    Returns:
-        清理后的文件名
-    """
+    """清理文件名，移除非法字符"""
     return re.sub(r'[\\/*?:"<>|]', '_', name).strip()
 
 
 def get_unique_filepath(base_path: str) -> str:
-    """
-    确保文件路径唯一：如果文件已存在，则在文件名后添加 (1), (2), ...
-
-    Args:
-        base_path: 基础文件路径
-
-    Returns:
-        唯一的文件路径
-
-    Examples:
-        >>> get_unique_filepath("test.pdf")  # 文件不存在时返回原路径
-        'test.pdf'
-    """
+    """确保文件路径唯一：已存在则在文件名后追加 (1)、(2) ..."""
     if not os.path.exists(base_path):
         return base_path
 
@@ -204,26 +163,13 @@ def get_unique_filepath(base_path: str) -> str:
 
 
 def get_save_folder_path() -> str:
-    """
-    获取保存文件夹的完整路径（不创建文件夹）
-
-    Returns:
-        保存文件夹的完整路径
-    """
+    """获取保存文件夹路径（不创建）"""
     desktop = os.path.join(os.path.expanduser("~"), Config.PATH.DESKTOP_RELATIVE_PATH)
     return os.path.join(desktop, Config.PATH.BASE_FOLDER_NAME)
 
 
 def create_date_folder_on_desktop() -> Optional[str]:
-    """
-    在桌面创建日期文件夹
-
-    Returns:
-        日期文件夹路径，失败返回 None
-
-    Raises:
-        FolderCreationError: 文件夹创建失败
-    """
+    """在桌面创建当天日期文件夹，失败抛出 FolderCreationError"""
     try:
         desktop = os.path.join(os.path.expanduser("~"), Config.PATH.DESKTOP_RELATIVE_PATH)
         base_folder = os.path.join(desktop, Config.PATH.BASE_FOLDER_NAME)
@@ -247,25 +193,18 @@ class PrintToolApp:
     """PDF打印工具主应用类"""
 
     def __init__(self, root: tk.Tk) -> None:
-        """
-        初始化应用
-
-        Args:
-            root: Tkinter根窗口
-        """
+        """初始化应用"""
         self.root = root
         self._setup_window()
 
-        # 状态变量
         self.url_entries: List[ttk.Entry] = []
         self.url_queue: List[str] = []
         self.total_urls: int = 0
         self.is_running: bool = False
         self.driver: Optional[webdriver.Edge] = None
 
-        # 进度相关
         self.completed_tasks: int = 0
-        self.total_tasks: int = 0  # URL数量 × 语言数量
+        self.total_tasks: int = 0  # URL数 × 每个URL的PDF数
 
         self._setup_ui()
         self._show_centered_window()
@@ -308,22 +247,12 @@ class PrintToolApp:
         main_frame = ttk.Frame(self.root, padding=Config.UI.MAIN_FRAME_PADDING)
         main_frame.pack(fill="both", expand=True)
 
-        # 标题
         self._create_title_label(main_frame)
-
-        # 网址列表区域
         self._create_url_area(main_frame)
-
-        # 进度条区域
         self._create_progress_area(main_frame)
-
-        # 按钮区域
         self._create_button_area(main_frame)
-
-        # 状态文本区域
         self._create_status_area(main_frame)
 
-        # 初始化
         self._append_status("请添加网址后开始任务...")
         self._add_url_entry(is_first=True)
 
@@ -381,11 +310,9 @@ class PrintToolApp:
         progress_frame = ttk.Frame(parent)
         progress_frame.pack(fill="x", pady=(10, 5))
 
-        # 进度标签
         self.progress_label = ttk.Label(progress_frame, text="准备就绪")
         self.progress_label.pack(anchor="w")
 
-        # 进度条
         self.progress_bar = ttk.Progressbar(
             progress_frame,
             mode="determinate",
@@ -446,12 +373,7 @@ class PrintToolApp:
     # ==================== 右键粘贴 ====================
 
     def _paste_on_right_click(self, event: tk.Event) -> str:
-        """
-        右键点击输入框时，直接将剪贴板内容粘贴到光标位置
-
-        Args:
-            event: 鼠标事件
-        """
+        """右键点击输入框时，直接将剪贴板内容粘贴到光标位置"""
         widget = event.widget
         try:
             self.root.clipboard_get()
@@ -468,12 +390,7 @@ class PrintToolApp:
     # ==================== 网址管理 ====================
 
     def _add_url_entry(self, is_first: bool = False) -> None:
-        """
-        添加一个网址输入框
-
-        Args:
-            is_first: 是否是第一个输入框（第一个不显示删除按钮）
-        """
+        """添加一个网址输入框（首个不显示删除按钮）"""
         row_frame = ttk.Frame(self.url_list_frame)
         row_frame.pack(fill="x", pady=2)
 
@@ -484,7 +401,7 @@ class PrintToolApp:
         )
         entry.pack(side="left", expand=True, fill="x")
 
-        # 右键直接粘贴剪贴板内容（Windows/Linux 为 <Button-3>，macOS 为 <Button-2>）
+        # Windows/Linux 为 <Button-3>，macOS 为 <Button-2>
         entry.bind("<Button-3>", self._paste_on_right_click)
         entry.bind("<Button-2>", self._paste_on_right_click)
 
@@ -504,25 +421,14 @@ class PrintToolApp:
         frame_to_remove: ttk.Frame,
         entry_to_remove: ttk.Entry
     ) -> None:
-        """
-        移除一个网址输入框
-
-        Args:
-            frame_to_remove: 要移除的框架
-            entry_to_remove: 要移除的输入框
-        """
+        """移除一个网址输入框"""
         frame_to_remove.destroy()
         self.url_entries.remove(entry_to_remove)
 
     # ==================== 状态更新 ====================
 
     def _append_status(self, message: str) -> None:
-        """
-        线程安全的日志更新方法
-
-        Args:
-            message: 要显示的消息
-        """
+        """线程安全地向状态栏追加一条日志"""
         def _update(*_args: Any) -> None:
             self.status_text.config(state="normal")
             self.status_text.insert(tk.END, f"{message}\n")
@@ -537,14 +443,7 @@ class PrintToolApp:
         total: int,
         message: str = ""
     ) -> None:
-        """
-        更新进度条
-
-        Args:
-            current: 当前进度
-            total: 总任务数
-            message: 进度描述信息
-        """
+        """更新进度条（线程安全）"""
         def _update_ui(*_args: Any) -> None:
             if total > 0:
                 percentage = (current / total) * 100
@@ -579,26 +478,22 @@ class PrintToolApp:
             messagebox.showerror("错误", "请输入至少一个网址！")
             return
 
-        # 验证URL格式
         for url in urls:
             if not url.startswith(("http://", "https://")):
                 messagebox.showerror("错误", f"网址格式不正确：\n{url}")
                 return
 
-        # 初始化任务状态
         self.url_queue = urls
         self.total_urls = len(urls)
-        self.total_tasks = self.total_urls * len(Config.PRINT.LANGUAGE_BUTTONS)
+        self.total_tasks = self.total_urls * Config.PRINT.EXPECTED_PDF_COUNT
         self.completed_tasks = 0
 
-        # 禁用按钮
         self.start_btn.config(state="disabled")
         self.add_url_button.config(state="disabled")
 
         self._append_status(f"🚀 任务队列已创建，共 {self.total_urls} 个URL，{self.total_tasks} 个打印任务。")
         self._update_progress(0, self.total_tasks, "准备中")
 
-        # 启动后台线程
         self.is_running = True
         thread = threading.Thread(target=self._process_all_urls, daemon=True)
         thread.start()
@@ -645,16 +540,7 @@ class PrintToolApp:
             self.root.after(0, self._reset_ui_state)
 
     def _run_print_job_for_url(self, driver: webdriver.Edge, url: str) -> bool:
-        """
-        在已有driver上处理单个URL
-
-        Args:
-            driver: WebDriver实例
-            url: 要处理的URL
-
-        Returns:
-            是否全部成功
-        """
+        """处理单个URL：点击一键导出按钮，下载压缩包并解压（失败自动重试）"""
         retry_count = 0
         max_retries = Config.PRINT.MAX_RETRIES
 
@@ -662,149 +548,160 @@ class PrintToolApp:
             try:
                 download_dir = create_date_folder_on_desktop()
 
+                # 本站为hash路由单页应用，直接切hash不会重新加载文档，
+                # 先跳空白页强制重载，避免导出上一位学生的数据
+                driver.get("about:blank")
+
                 self._append_status(f"正在打开网页：{url}")
                 driver.get(url)
 
-                # 等待页面加载
                 wait = WebDriverWait(driver, Config.BROWSER.SELENIUM_TIMEOUT)
-                first_button_xpath = (
-                    f"//button[contains(normalize-space(.), "
-                    f"'{Config.PRINT.LANGUAGE_BUTTONS[0][0]}')]"
-                )
-
+                button_xpath = self._export_button_xpath()
                 try:
-                    wait.until(EC.visibility_of_element_located((By.XPATH, first_button_xpath)))
+                    wait.until(EC.visibility_of_element_located((By.XPATH, button_xpath)))
                 except TimeoutException:
-                    raise PageLoadError(f"页面加载超时或未找到打印按钮: {url}")
+                    raise PageLoadError(f"页面加载超时或未找到导出按钮: {url}")
 
-                # 确认页面完全加载
                 driver.execute_script("return document.readyState == 'complete'")
                 self._append_status("页面加载完成")
 
-                # 处理各语言打印
-                all_success = True
-                for btn_text, lang_tag in Config.PRINT.LANGUAGE_BUTTONS:
-                    try:
-                        success = self._process_single_language(
-                            driver, btn_text, lang_tag, download_dir
-                        )
-                        if success:
-                            self.completed_tasks += 1
-                            self._update_progress(
-                                self.completed_tasks,
-                                self.total_tasks,
-                                f"处理中"
-                            )
-                        else:
-                            all_success = False
-                    except ButtonNotFoundError:
-                        self._append_status(f"❌ 未找到按钮: {btn_text}")
-                        all_success = False
-                    except PDFGenerationError as e:
-                        self._append_status(f"❌ PDF生成失败 ({lang_tag}): {e}")
-                        all_success = False
+                try:
+                    driver.execute_cdp_cmd(
+                        "Browser.setDownloadBehavior",
+                        {"behavior": "allow", "downloadPath": download_dir}
+                    )
+                except WebDriverException as e:
+                    logger.warning(f"设置下载目录失败，将使用浏览器默认下载目录: {e}")
 
-                    time.sleep(Config.BROWSER.BETWEEN_CLICKS_DELAY)
+                before_files = set(os.listdir(download_dir))
 
-                return all_success
+                export_button = wait.until(
+                    EC.element_to_be_clickable((By.XPATH, button_xpath))
+                )
+                export_button.click()
+                self._append_status("已点击一键导出，等待压缩包下载...")
 
-            except PageLoadError:
+                zip_path = self._wait_for_zip_download(download_dir, before_files)
+                saved_files = self._extract_zip(zip_path, download_dir)
+
+                self.completed_tasks += len(saved_files)
+                self._update_progress(
+                    min(self.completed_tasks, self.total_tasks),
+                    self.total_tasks,
+                    "处理中"
+                )
+                return True
+
+            except (PageLoadError, ButtonNotFoundError,
+                    DownloadTimeoutError, ZIPExtractionError) as e:
                 retry_count += 1
                 if retry_count > max_retries:
-                    self._append_status(f"❌ 页面加载失败，已重试 {max_retries} 次，跳过此任务")
+                    self._append_status(f"❌ {e}，已重试 {max_retries} 次，跳过此任务")
                     return False
-                self._append_status(f"⚠️ 页面加载失败，正在重试 ({retry_count}/{max_retries})...")
+                self._append_status(f"⚠️ {e}，正在重试 ({retry_count}/{max_retries})...")
                 time.sleep(2)
 
             except FolderCreationError:
                 return False
 
-        # 理论上不会到达这里，但为了类型检查器添加默认返回值
+        # 不可达，仅为类型检查器保留
         return False
 
-    def _process_single_language(
-        self,
-        driver: webdriver.Edge,
-        btn_text: str,
-        lang_tag: str,
-        download_dir: str
-    ) -> bool:
-        """
-        处理单个语言版本的打印
+    @staticmethod
+    def _export_button_xpath() -> str:
+        """构造一键导出按钮的XPath（兼容button、a及role=button元素）"""
+        text = Config.PRINT.EXPORT_BUTTON_TEXT
+        return (
+            f"(//button[contains(normalize-space(.), '{text}')]"
+            f"|//a[contains(normalize-space(.), '{text}')]"
+            f"|//*[@role='button'][contains(normalize-space(.), '{text}')])"
+        )
 
-        Args:
-            driver: WebDriver实例
-            btn_text: 按钮文本
-            lang_tag: 语言标签
-            download_dir: 下载目录
+    def _wait_for_zip_download(self, download_dir: str, before_files: set) -> str:
+        """轮询等待新下载的ZIP完成并返回路径，超时抛 DownloadTimeoutError"""
+        deadline = time.time() + Config.PRINT.DOWNLOAD_TIMEOUT
+        last_size = -1
 
-        Returns:
-            是否成功
+        while time.time() < deadline:
+            time.sleep(Config.PRINT.DOWNLOAD_POLL_INTERVAL)
+            new_files = set(os.listdir(download_dir)) - before_files
 
-        Raises:
-            ButtonNotFoundError: 按钮未找到
-            PDFGenerationError: PDF生成失败
-        """
-        self._append_status(f"  → 处理：{btn_text}")
-        wait = WebDriverWait(driver, Config.BROWSER.SELENIUM_TIMEOUT)
+            if any(f.endswith((".crdownload", ".tmp", ".part")) for f in new_files):
+                last_size = -1
+                continue
 
+            zip_files = sorted(
+                (f for f in new_files if f.lower().endswith(".zip")),
+                key=lambda f: os.path.getmtime(os.path.join(download_dir, f)),
+                reverse=True
+            )
+            if zip_files:
+                zip_path = os.path.join(download_dir, zip_files[0])
+                try:
+                    size = os.path.getsize(zip_path)
+                except OSError:
+                    continue
+                # 大小连续两次轮询稳定视为下载完成
+                if size > 0 and size == last_size:
+                    return zip_path
+                last_size = size
+
+        raise DownloadTimeoutError(
+            f"{int(Config.PRINT.DOWNLOAD_TIMEOUT)}秒内未检测到下载完成的压缩包"
+        )
+
+    def _extract_zip(self, zip_path: str, download_dir: str) -> List[str]:
+        """解压ZIP中的PDF到下载目录（保留原文件名），完成后删除压缩包"""
+        saved_files: List[str] = []
         try:
-            # 查找并点击按钮
-            lang_button_xpath = (
-                f"//button[contains(normalize-space(.), '{btn_text}')]"
+            with zipfile.ZipFile(zip_path) as zf:
+                pdf_entries = [
+                    name for name in zf.namelist()
+                    if not name.endswith('/') and name.lower().endswith('.pdf')
+                ]
+                if not pdf_entries:
+                    raise ZIPExtractionError(
+                        f"压缩包 {os.path.basename(zip_path)} 中未找到PDF文件"
+                    )
+
+                for entry in pdf_entries:
+                    # 只取文件名，防止压缩包内路径逃逸
+                    filename = clean_filename(
+                        os.path.basename(entry.replace('\\', '/'))
+                    )
+                    if not filename:
+                        continue
+                    target_path = get_unique_filepath(
+                        os.path.join(download_dir, filename)
+                    )
+                    with zf.open(entry) as src, open(target_path, 'wb') as dst:
+                        dst.write(src.read())
+                    saved_files.append(target_path)
+                    self._append_status(f"  ✅ 已保存：{os.path.basename(target_path)}")
+        except zipfile.BadZipFile as e:
+            raise ZIPExtractionError(f"压缩包损坏或不是有效的ZIP文件: {e}") from e
+        except (OSError, IOError) as e:
+            raise ZIPExtractionError(f"解压保存PDF失败: {e}") from e
+
+        expected = Config.PRINT.EXPECTED_PDF_COUNT
+        if len(saved_files) != expected:
+            self._append_status(
+                f"  ⚠️ 本次解压出 {len(saved_files)} 个PDF，预期 {expected} 个"
             )
-            lang_button = wait.until(
-                EC.element_to_be_clickable((By.XPATH, lang_button_xpath))
-            )
-            lang_button.click()
 
-            # 等待页面响应
-            time.sleep(Config.BROWSER.PAGE_LOAD_WAIT)
+        if saved_files:
+            try:
+                os.remove(zip_path)
+                self._append_status(f"  🗑️ 已删除压缩包：{os.path.basename(zip_path)}")
+            except OSError as e:
+                logger.warning(f"删除压缩包失败: {e}")
 
-            # 获取页面标题作为文件名
-            page_title = driver.title
-            base_filename = clean_filename(page_title)
-
-            if not base_filename:
-                base_filename = f"{Config.PATH.DEFAULT_FILENAME_PREFIX}_{datetime.now().strftime(Config.PATH.TIME_FORMAT)}"
-
-            self._append_status(f"  → 文件名：{base_filename}_{lang_tag}.pdf")
-
-            # 生成PDF
-            result = driver.execute_cdp_cmd("Page.printToPDF", PrintConfig.get_pdf_options())
-            pdf_data = base64.b64decode(result['data'])
-
-            # 保存文件
-            filename = f"{base_filename}_{lang_tag}.pdf"
-            full_path = os.path.join(download_dir, filename)
-            unique_path = get_unique_filepath(full_path)
-
-            with open(unique_path, 'wb') as f:
-                f.write(pdf_data)
-
-            saved_name = os.path.basename(unique_path)
-            self._append_status(f"  ✅ 已保存：{saved_name}")
-            return True
-
-        except TimeoutException:
-            raise ButtonNotFoundError(f"未找到 '{btn_text}' 按钮")
-        except WebDriverException as e:
-            raise PDFGenerationError(f"PDF生成失败: {e}")
-        except IOError as e:
-            raise PDFGenerationError(f"文件保存失败: {e}")
+        return saved_files
 
     # ==================== 浏览器管理 ====================
 
     def _setup_driver(self) -> webdriver.Edge:
-        """
-        配置并返回Edge WebDriver实例
-
-        Returns:
-            配置好的WebDriver实例
-
-        Raises:
-            DriverSetupError: 驱动初始化失败
-        """
+        """配置并返回 Edge WebDriver 实例，失败抛 DriverSetupError"""
         try:
             self._append_status("配置 Edge 浏览器...")
             options = Options()
@@ -822,6 +719,21 @@ class PrintToolApp:
 
             options.add_argument(f"--window-size={Config.BROWSER.WINDOW_SIZE}")
             options.add_experimental_option('excludeSwitches', ['enable-logging'])
+
+            # 直接下载到日期文件夹，不弹保存对话框
+            try:
+                download_dir = create_date_folder_on_desktop()
+            except FolderCreationError as e:
+                raise DriverSetupError(str(e)) from e
+            options.add_experimental_option(
+                'prefs',
+                {
+                    'download.default_directory': download_dir,
+                    'download.prompt_for_download': False,
+                    'plugins.always_open_pdf_externally': True,
+                }
+            )
+            self._append_status(f"下载目录：{download_dir}")
 
             driver_path = resource_path(Config.BROWSER.DRIVER_FILENAME)
             self._append_status(f"使用驱动: {driver_path}")
@@ -907,7 +819,6 @@ class PrintToolApp:
         text_widget.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-        # 配置文本样式
         text_widget.tag_configure(
             "title",
             font=(Config.UI.FONT_FAMILY, 14, "bold"),
@@ -948,7 +859,6 @@ class PrintToolApp:
             borderwidth=1
         )
 
-        # 插入帮助内容
         text_widget.insert("end", "AutoGeneratePDF 使用指南\n", "title")
 
         text_widget.insert("end", "📌 基本流程\n", "section")
@@ -956,22 +866,22 @@ class PrintToolApp:
         text_widget.insert("end", "• 每个网址必须以 http:// 或 https:// 开头。\n", "bullet")
         text_widget.insert("end", "• 点击「✅ 开始打印」后，程序将自动：\n", "bullet")
         text_widget.insert("end", "  - 打开每个网页（使用 Edge 浏览器）\n", "body")
-        text_widget.insert("end", "  - 依次点击‘打印中英文’、‘打印英文’、‘打印中文’、‘打印音标’四个按钮\n", "body")
-        text_widget.insert("end", "  - 直接导出对应 PDF，无需手动点击‘在线打印’\n", "body")
-        text_widget.insert("end", "  - 将每个语言版本生成 PDF 并保存到桌面的 AutoGeneratePDF/日期 文件夹中\n", "body")
+        text_widget.insert("end", "  - 点击网页上的「一键导出PDF」按钮\n", "body")
+        text_widget.insert("end", "  - 网站会生成包含中文、英文、中英文、音标四个版本的压缩包并自动下载\n", "body")
+        text_widget.insert("end", "  - 程序自动解压 PDF 到桌面的 AutoGeneratePDF/日期 文件夹，并删除压缩包\n", "body")
 
         text_widget.insert("end", "\n📌 注意事项\n", "section")
-        text_widget.insert("end", "• 网页必须包含打印按钮（打印中英文/打印英文/打印中文/打印音标）\n", "bullet")
+        text_widget.insert("end", "• 网页必须包含「一键导出PDF」按钮\n", "bullet")
         text_widget.insert("end", "• 首次运行可能较慢（需加载浏览器），请耐心等待\n", "bullet")
         text_widget.insert("end", "• 若某任务失败，程序会自动重试2次后跳过\n", "bullet")
-        text_widget.insert("end", "• 运行时不要关闭窗口，直到出现‘全部任务完成’弹窗\n", "bullet")
+        text_widget.insert("end", "• 运行时不要关闭窗口，直到出现'全部任务完成'弹窗\n", "bullet")
         text_widget.insert("end", "• 如果浏览器启动失败，请检查 msedgedriver.exe 是否和 Edge 浏览器版本匹配\n", "bullet")
 
         text_widget.insert("end", "\n📌 输出位置\n", "section")
         text_widget.insert("end", "所有 PDF 文件将保存在：\n", "body")
         text_widget.insert("end", "桌面 → AutoGeneratePDF → YYMMDD（当天日期文件夹）", "path")
         text_widget.insert("end", "\n\n", "body")
-        text_widget.insert("end", "每个网址通常会生成四个文件：中英文、英文、中文、音标。\n", "body")
+        text_widget.insert("end", "每个网址通常会解压出四个文件：中文、英文、中英文、音标，文件名与压缩包内一致。\n", "body")
         text_widget.insert("end", "如果同名文件已存在，程序会自动追加 (1)、(2) 等编号，避免覆盖旧文件。\n", "body")
 
         text_widget.insert("end", "📌 常见问题\n", "section")
@@ -982,17 +892,15 @@ class PrintToolApp:
         text_widget.insert("end", "A: 在 Edge 浏览器网址栏输入 edge://settings/help\n\n", "body")
 
         text_widget.insert("end", "Q: 为什么只能生成部分 PDF？\n", "note")
-        text_widget.insert("end", "A: 请确认网页四个打印按钮都能正常显示，并保持网络连接稳定\n\n", "body")
+        text_widget.insert("end", "A: 请确认网页「一键导出PDF」按钮能正常显示、压缩包下载完整，并保持网络连接稳定\n\n", "body")
 
         text_widget.insert("end", "如有问题，请联系作者：springleaf\n", "note")
 
         text_widget.config(state="disabled")
 
-        # 关闭按钮
         close_btn = ttk.Button(help_window, text="关闭", command=help_window.destroy)
         close_btn.pack(pady=10)
 
-        # 居中并显示
         def center_and_show():
             help_window.update_idletasks()
             width = max(help_window.winfo_width(), 550)
